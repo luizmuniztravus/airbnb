@@ -85,13 +85,44 @@ Quando o formato estabilizar:
 2. Reescreva `normalizeCheckin` com um parse estrito (zod) usando esses exemplos como fixtures.
 3. Remova o bloco `_payload:_` de `src/domain/template.ts`.
 
-## Docker
+## Produção com PM2
 
 ```bash
-docker build -t checkin-notifier .
-docker run -d --name checkin -p 3000:3000 --env-file .env \
-  -v checkin-data:/app/data checkin-notifier
-docker logs -f checkin   # o QR do primeiro pareamento aparece aqui
+npm install -g pm2
+npm ci
+cp .env.example .env   # preencha WEBHOOK_SECRET
+npm run pm2:start      # compila e sobe o processo
+npm run pm2:logs       # o QR do primeiro pareamento aparece aqui
 ```
 
-O volume em `/app/data` é obrigatório: sem ele, a sessão do WhatsApp e o banco se perdem a cada restart.
+Sobreviver ao reboot da máquina:
+
+```bash
+pm2 save
+pm2 startup   # execute o comando que ele imprimir (usa sudo)
+```
+
+| Comando | O que faz |
+|---|---|
+| `npm run pm2:start` | `npm run build` + `pm2 start` |
+| `npm run pm2:restart` | rebuild e reinicia relendo o `.env` |
+| `npm run pm2:stop` | para o processo (mantém na lista do PM2) |
+| `npm run pm2:logs` | acompanha os logs |
+| `pm2 status` | estado, uptime, restarts |
+
+Configuração em [`ecosystem.config.cjs`](ecosystem.config.cjs). Dois pontos que não são detalhe:
+
+- **`instances: 1` e `exec_mode: 'fork'`.** Não coloque em cluster. Só existe uma sessão do Baileys em `AUTH_DIR`, e duas conexões no mesmo pareamento derrubam uma à outra; além disso o worker do outbox é um `setInterval` por processo, então N instâncias mandariam a mesma mensagem N vezes no grupo.
+- **`kill_timeout: 15000`.** O encerramento fecha o Fastify, o socket do WhatsApp e o banco. O padrão do PM2 (1,6s) mata no meio.
+
+Os segredos ficam no `.env`, lido pelo próprio app (`process.loadEnvFile`) — o `ecosystem.config.cjs` é versionado e não deve conter nada sensível. Como o app resolve `.env`, `data/` e `dist/` a partir do cwd, o ecosystem fixa `cwd: __dirname`.
+
+Logs vão para `logs/out.log` e `logs/error.log` (gitignorados). Para rotacioná-los:
+
+```bash
+pm2 install pm2-logrotate
+```
+
+### Diretório `data/`
+
+`data/auth_info/` (credenciais do número pareado) e `data/app.db` (eventos + outbox) precisam persistir entre restarts — sem eles o QR volta a cada boot. Faça backup desse diretório e **nunca** o versione.
