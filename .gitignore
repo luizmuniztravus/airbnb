@@ -1,0 +1,14 @@
+node_modules/
+dist/
+
+# Sessão do WhatsApp e banco de dados.
+# NUNCA versionar: data/auth_info/ contém as credenciais do número pareado.
+data/
+
+.env
+.env.local
+
+*.log
+npm-debug.log*
+
+.DS_Store

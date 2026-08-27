@@ -1,0 +1,81 @@
+import { createHash } from 'node:crypto'
+import type { FastifyInstance } from 'fastify'
+import { env } from '../config/env.js'
+import { insertEvent } from '../db/events.js'
+import { enqueue, hasMessageForEvent } from '../db/outbox.js'
+import { normalizeCheckin, isUnmapped } from '../domain/checkin.js'
+import { formatCheckinMessage } from '../domain/template.js'
+import { requireToken } from './auth.js'
+
+const SOURCE = 'nova-reserva'
+
+/** Campos de id mais comuns; sem nenhum deles, cai no hash do payload. */
+const ID_FIELDS = [
+  'id',
+  'event_id',
+  'reservation_id',
+  'booking_id',
+  'confirmation_code',
+  'reservation_code',
+  'uuid',
+]
+
+function resolveDedupeKey(payload: unknown, rawJson: string): string {
+  if (payload !== null && typeof payload === 'object') {
+    const record = payload as Record<string, unknown>
+    for (const field of ID_FIELDS) {
+      const value = record[field]
+      if (typeof value === 'string' && value.trim() !== '') return `${SOURCE}:${value.trim()}`
+      if (typeof value === 'number') return `${SOURCE}:${value}`
+    }
+  }
+  return `${SOURCE}:sha256:${createHash('sha256').update(rawJson).digest('hex')}`
+}
+
+export async function webhookRoutes(app: FastifyInstance) {
+  app.post(
+    '/webhooks/nova-reserva',
+    { preHandler: requireToken },
+    async (req, reply) => {
+      const payload = req.body ?? {}
+      const rawJson = JSON.stringify(payload)
+
+      // Responder rápido é o ponto: o provedor não deve esperar o WhatsApp.
+      const dedupeKey = resolveDedupeKey(payload, rawJson)
+      const event = insertEvent({ dedupeKey, source: SOURCE, rawPayload: rawJson })
+
+      // Um evento já visto só é ignorado se de fato virou mensagem. Eventos
+      // gravados antes do grupo existir (`stored_no_target`) ficariam presos
+      // como duplicados para sempre — aqui eles são recuperados no reenvio.
+      if (event.isDuplicate && hasMessageForEvent(event.id)) {
+        req.log.info({ dedupeKey, eventId: event.id }, 'evento duplicado, ignorado')
+        return reply.code(200).send({ status: 'duplicate', eventId: event.id })
+      }
+
+      if (!env.WHATSAPP_GROUP_JID) {
+        // O evento fica gravado; sem destino não há o que enfileirar.
+        req.log.error({ eventId: event.id }, 'WHATSAPP_GROUP_JID não configurado — evento salvo sem envio')
+        return reply.code(200).send({
+          status: 'stored_no_target',
+          eventId: event.id,
+          hint: 'configure WHATSAPP_GROUP_JID (veja GET /whatsapp/groups)',
+        })
+      }
+
+      const evt = normalizeCheckin(payload)
+      const body = formatCheckinMessage(evt)
+      const outboxId = enqueue({
+        eventId: event.id,
+        targetJid: env.WHATSAPP_GROUP_JID,
+        body,
+      })
+
+      req.log.info(
+        { eventId: event.id, outboxId, dedupeKey, unmapped: isUnmapped(evt) },
+        'evento enfileirado',
+      )
+
+      return reply.code(200).send({ status: 'queued', eventId: event.id, outboxId })
+    },
+  )
+}
