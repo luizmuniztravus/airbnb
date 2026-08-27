@@ -107,12 +107,10 @@ export async function connect(): Promise<void> {
       currentQr = qr
       status = 'qr'
       log.warn('escaneie o QR code abaixo com o WhatsApp do número dedicado')
-      // Sob pm2 não há terminal para escanear: o QR sai por GET /whatsapp/status.
-      if (process.stdout.isTTY) {
-        qrcode.generate(qr, { small: true })
-      } else {
-        log.warn('sem TTY (pm2/serviço) — pegue a string do QR em GET /whatsapp/status')
-      }
+      // Vai direto ao stdout, sem passar pelo logger: os blocos precisam sair
+      // crus para o QR continuar escaneável em `npm run pm2:logs`.
+      qrcode.generate(qr, { small: true })
+      log.warn('se o QR não renderizar no seu terminal, pegue a string em GET /whatsapp/status')
     }
 
     if (connection === 'open') {

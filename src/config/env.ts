@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { existsSync } from 'node:fs'
 
 // Node 24 carrega .env nativamente — sem dotenv. Variáveis já definidas no
-// ambiente (Docker, systemd) têm precedência e não são sobrescritas.
+// ambiente (PM2, systemd) têm precedência e não são sobrescritas.
 if (existsSync('.env')) {
   process.loadEnvFile('.env')
 }
