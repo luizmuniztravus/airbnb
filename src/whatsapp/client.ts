@@ -29,6 +29,14 @@ let currentQr: string | undefined
 let reconnectAttempts = 0
 let reconnectTimer: NodeJS.Timeout | undefined
 let stopped = false
+let openedAt: number | undefined
+
+/** Nome do código de desconexão do Baileys — 428 sozinho não diz nada no log. */
+function nomeDoMotivo(code: number | undefined): string {
+  if (code === undefined) return 'desconhecido'
+  const entry = Object.entries(DisconnectReason).find(([, v]) => v === code)
+  return entry?.[0] ?? 'desconhecido'
+}
 
 export function getStatus(): ConnectionStatus {
   return status
@@ -55,7 +63,10 @@ function scheduleReconnect() {
   // 2s, 4s, 8s ... teto de 60s, para não martelar o servidor do WhatsApp.
   const delay = Math.min(2_000 * 2 ** reconnectAttempts, 60_000)
   reconnectAttempts += 1
-  log.info({ delayMs: delay, attempt: reconnectAttempts }, 'reagendando reconexão')
+  // Depois de 5 tentativas já não é oscilação de rede: sobe para warn para
+  // aparecer mesmo em quem filtra o log por nível.
+  const level = reconnectAttempts > 5 ? 'warn' : 'info'
+  log[level]({ delayMs: delay, attempt: reconnectAttempts }, 'reagendando reconexão')
   reconnectTimer = setTimeout(() => {
     connect().catch((err) => {
       log.error({ err }, 'falha ao reconectar')
@@ -96,24 +107,44 @@ export async function connect(): Promise<void> {
       currentQr = qr
       status = 'qr'
       log.warn('escaneie o QR code abaixo com o WhatsApp do número dedicado')
-      qrcode.generate(qr, { small: true })
+      // Sob pm2 não há terminal para escanear: o QR sai por GET /whatsapp/status.
+      if (process.stdout.isTTY) {
+        qrcode.generate(qr, { small: true })
+      } else {
+        log.warn('sem TTY (pm2/serviço) — pegue a string do QR em GET /whatsapp/status')
+      }
     }
 
     if (connection === 'open') {
       currentQr = undefined
       status = 'open'
+      openedAt = Date.now()
+      log.info(
+        { jid: sock?.user?.id, aposTentativas: reconnectAttempts },
+        'conexão aberta',
+      )
       reconnectAttempts = 0
-      log.info({ jid: sock?.user?.id }, 'conexão aberta')
       return
     }
 
     if (connection === 'close') {
       status = 'disconnected'
       const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode
+      const conexaoDurouMs = openedAt !== undefined ? Date.now() - openedAt : undefined
+      openedAt = undefined
+
+      // Fechamento provocado pelo próprio shutdown: não é incidente.
+      if (stopped) {
+        log.debug({ conexaoDurouMs }, 'socket fechado durante o encerramento')
+        return
+      }
 
       if (statusCode === DisconnectReason.loggedOut) {
         // Sessão invalidada no celular: as credenciais não servem mais.
-        log.error('sessão encerrada no aparelho — limpando credenciais, será preciso novo QR')
+        log.error(
+          { statusCode, motivo: nomeDoMotivo(statusCode), conexaoDurouMs },
+          'sessão encerrada no aparelho — limpando credenciais, será preciso novo QR',
+        )
         void rm(env.AUTH_DIR, { recursive: true, force: true })
           .then(() => {
             reconnectAttempts = 0
@@ -125,7 +156,7 @@ export async function connect(): Promise<void> {
 
       if (statusCode === DisconnectReason.restartRequired) {
         // Esperado logo após parear: reconectar de imediato.
-        log.info('restart solicitado pelo WhatsApp — reconectando')
+        log.info({ statusCode, motivo: nomeDoMotivo(statusCode) }, 'restart solicitado pelo WhatsApp — reconectando')
         reconnectAttempts = 0
         void connect().catch((err) => {
           log.error({ err }, 'falha no restart')
@@ -134,7 +165,15 @@ export async function connect(): Promise<void> {
         return
       }
 
-      log.warn({ statusCode, err: lastDisconnect?.error?.message }, 'conexão fechada')
+      log.warn(
+        {
+          statusCode,
+          motivo: nomeDoMotivo(statusCode),
+          conexaoDurouMs,
+          err: lastDisconnect?.error?.message,
+        },
+        'conexão fechada',
+      )
       scheduleReconnect()
     }
   })

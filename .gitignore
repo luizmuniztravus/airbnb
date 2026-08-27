@@ -11,4 +11,7 @@ data/
 *.log
 npm-debug.log*
 
+# Saída do pm2 (out_file/error_file do ecosystem.config.cjs)
+logs/
+
 .DS_Store

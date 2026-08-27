@@ -85,6 +85,74 @@ Quando o formato estabilizar:
 2. Reescreva `normalizeCheckin` com um parse estrito (zod) usando esses exemplos como fixtures.
 3. Remova o bloco `_payload:_` de `src/domain/template.ts`.
 
+## Deploy na VPS (pm2)
+
+```bash
+npm ci
+npm run build
+mkdir -p logs
+pm2 start ecosystem.config.cjs
+pm2 save          # persiste a lista de apps
+pm2 startup       # gera o serviço systemd para subir no boot (rode o comando que ele imprimir)
+```
+
+O `ecosystem.config.cjs` fixa três coisas que não são opcionais:
+
+- **`instances: 1` / `exec_mode: 'fork'`** — o Baileys mantém **uma** sessão do WhatsApp Web. Uma segunda instância com as mesmas credenciais derruba a primeira; em `cluster` o serviço entraria em loop de desconexão.
+- **`kill_timeout: 10000`** — o encerramento fecha HTTP, socket do WhatsApp e SQLite. O padrão do pm2 (1,6 s) mata no meio disso.
+- **`watch: false`** — `data/` muda a cada mensagem (sessão + WAL do SQLite) e reiniciaria o processo sem parar.
+
+Variáveis de ambiente continuam vindo do `.env` da máquina. O bloco `env` do ecosystem define só `NODE_ENV`: o que estiver ali **tem precedência** sobre o `.env` (`process.loadEnvFile` não sobrescreve o ambiente), então duplicar `LOG_LEVEL` lá faria a edição do `.env` parecer não ter efeito.
+
+### Primeiro pareamento sob pm2
+
+Não há terminal para o QR. O log avisa e a string fica em:
+
+```bash
+curl -H "x-webhook-token: SEU_SEGREDO" localhost:3000/whatsapp/status | jq -r .qr
+```
+
+Gere a imagem em qualquer leitor de QR a partir dessa string (ex.: `qrencode -t ansiutf8 "$(...)"`).
+
+## Logs
+
+Uma linha por evento, com timestamp ISO carimbado pelo próprio processo (por isso `time: false` no pm2 — o prefixo dele seria duplicado).
+
+| Variável | Valores | Efeito |
+|---|---|---|
+| `LOG_LEVEL` | `trace`…`fatal`, `silent` | `debug` inclui `/health` e o log interno do Baileys |
+| `LOG_FORMAT` | `pretty` (padrão) / `json` | `pretty` para ler com `pm2 logs`; `json` para agregador |
+
+```bash
+pm2 logs checkin-notifier            # ao vivo
+pm2 logs checkin-notifier --lines 200
+grep '"level":50' logs/out.log       # só erros, quando LOG_FORMAT=json
+```
+
+O que cada nível significa aqui:
+
+- **`warn`** — precisa de atenção mas o serviço se recupera sozinho: token inválido, conexão do WhatsApp caiu, envio reagendado, payload sem campos reconhecidos.
+- **`error`** — algo ficou para trás: falha definitiva de envio (as 6 tentativas acabaram, a mensagem **não** vai chegar ao grupo), sessão deslogada no celular, 5xx numa rota.
+- **`fatal`** — o processo vai morrer e o pm2 reiniciar.
+
+Detalhes que ajudam no diagnóstico remoto:
+
+- **Fila parada aparece no log.** Com o WhatsApp desconectado e mensagens pendentes, sai um `warn` a cada ~1 min com quantas esperam e há quanto tempo — sem isso a desconexão longa seria silenciosa.
+- **Motivo da desconexão vem por nome**, não só pelo código (`loggedOut`, `restartRequired`, `connectionReplaced`…), junto de quanto tempo a conexão durou.
+- **Boot registra a configuração efetiva** (porta, nível de log, caminhos, se o grupo está configurado) e o estado da fila herdada do processo anterior.
+- **`x-webhook-token`, `Authorization` e `WEBHOOK_SECRET` são redigidos** antes de escrever. Os arquivos do pm2 ficam em disco na VPS; o token chega em todo request e vazaria junto com os headers.
+
+### Rotação
+
+O pm2 não rotaciona nada sozinho — sem isto `logs/out.log` cresce até encher o disco:
+
+```bash
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 14
+pm2 set pm2-logrotate:compress true
+```
+
 ## Docker
 
 ```bash
