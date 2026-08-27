@@ -93,6 +93,13 @@ export function markFailure(row: OutboxRow, error: string) {
   return { retrying: true as const, attempts, nextAttemptAt }
 }
 
+const countPendingStmt = db.prepare(`SELECT COUNT(*) as n FROM outbox WHERE status = 'pending'`)
+
+/** Quantas mensagens ainda esperam envio — usado só para log de diagnóstico. */
+export function countPending(): number {
+  return (countPendingStmt.get() as { n: number }).n
+}
+
 export function stats() {
   return db
     .prepare(`SELECT status, COUNT(*) as count FROM outbox GROUP BY status`)

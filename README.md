@@ -139,12 +139,48 @@ Configuração em [`ecosystem.config.cjs`](ecosystem.config.cjs). Dois pontos qu
 
 Os segredos ficam no `.env`, lido pelo próprio app (`process.loadEnvFile`) — o `ecosystem.config.cjs` é versionado e não deve conter nada sensível. Como o app resolve `.env`, `data/` e `dist/` a partir do cwd, o ecosystem fixa `cwd: __dirname`.
 
-Logs vão para `logs/out.log` e `logs/error.log` (gitignorados). Para rotacioná-los:
-
-```bash
-pm2 install pm2-logrotate
-```
+Logs vão para `logs/out.log` e `logs/error.log` (gitignorados) — veja [Logs](#logs).
 
 ### Diretório `data/`
 
 `data/auth_info/` (credenciais do número pareado) e `data/app.db` (eventos + outbox) precisam persistir entre restarts — sem eles o QR volta a cada boot. Faça backup desse diretório e **nunca** o versione.
+
+## Logs
+
+Uma linha por evento, com timestamp ISO carimbado pelo próprio processo (por isso `time: false` no ecosystem — o prefixo do PM2 seria duplicado).
+
+| Variável | Valores | Efeito |
+|---|---|---|
+| `LOG_LEVEL` | `trace`…`fatal`, `silent` | `debug` inclui `/health` e o log interno do Baileys |
+| `LOG_FORMAT` | `pretty` (padrão) / `json` | `pretty` para ler com `npm run pm2:logs`; `json` para agregador |
+
+```bash
+npm run pm2:logs                     # ao vivo
+pm2 logs checkin-notifier --lines 200
+grep '"level":50' logs/out.log       # só erros, quando LOG_FORMAT=json
+```
+
+O que cada nível significa aqui:
+
+- **`warn`** — precisa de atenção mas o serviço se recupera sozinho: token inválido, conexão do WhatsApp caiu, envio reagendado, payload sem campos reconhecidos.
+- **`error`** — algo ficou para trás: falha definitiva de envio (as 6 tentativas acabaram, a mensagem **não** vai chegar ao grupo), sessão deslogada no celular, 5xx numa rota.
+- **`fatal`** — o processo vai morrer e o PM2 reiniciar.
+
+Detalhes que ajudam no diagnóstico remoto:
+
+- **Fila parada aparece no log.** Com o WhatsApp desconectado e mensagens pendentes, sai um `warn` a cada ~1 min com quantas esperam e há quanto tempo — sem isso a desconexão longa seria silenciosa.
+- **Motivo da desconexão vem por nome**, não só pelo código (`loggedOut`, `restartRequired`, `connectionReplaced`…), junto de quanto tempo a conexão durou.
+- **Boot registra a configuração efetiva** (porta, nível de log, caminhos, se o grupo está configurado) e o estado da fila herdada do processo anterior.
+- **Uma linha por requisição** (método, url, status, ms, ip, `reqId`), não as duas do log automático do Fastify. `/health` cai para `debug` para o monitoramento não inundar o arquivo.
+- **`x-webhook-token`, `Authorization` e `WEBHOOK_SECRET` são redigidos** antes de escrever. Os arquivos do PM2 ficam em disco na VPS; o token chega em todo request e vazaria junto com os headers.
+
+### Rotação
+
+O PM2 não rotaciona nada sozinho — sem isto `logs/out.log` cresce até encher o disco:
+
+```bash
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 14
+pm2 set pm2-logrotate:compress true
+```

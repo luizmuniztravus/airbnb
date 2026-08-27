@@ -10,7 +10,13 @@ if (existsSync('.env')) {
 const schema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   HOST: z.string().default('0.0.0.0'),
-  LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
+  LOG_LEVEL: z
+    .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'])
+    .default('info'),
+
+  // `pretty` deixa `pm2 logs` legível; `json` é para quando a saída for coletada
+  // por um agregador (Loki, Datadog...). Cores só saem se houver TTY.
+  LOG_FORMAT: z.enum(['pretty', 'json']).default('pretty'),
 
   // Token exigido no header `x-webhook-token`.
   WEBHOOK_SECRET: z.string().min(8, 'WEBHOOK_SECRET precisa ter ao menos 8 caracteres'),

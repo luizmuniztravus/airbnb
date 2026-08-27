@@ -70,8 +70,17 @@ export async function webhookRoutes(app: FastifyInstance) {
         body,
       })
 
+      // Nenhum campo reconhecido significa mensagem crua no grupo — o sinal de
+      // que `domain/checkin.ts` precisa ser ajustado ao payload real.
+      if (isUnmapped(evt)) {
+        req.log.warn(
+          { eventId: event.id, outboxId, dedupeKey, campos: Object.keys(payload as object) },
+          'payload sem campos reconhecidos — ajuste normalizeCheckin (veja GET /events)',
+        )
+      }
+
       req.log.info(
-        { eventId: event.id, outboxId, dedupeKey, unmapped: isUnmapped(evt) },
+        { eventId: event.id, outboxId, dedupeKey, bytes: rawJson.length },
         'evento enfileirado',
       )
 

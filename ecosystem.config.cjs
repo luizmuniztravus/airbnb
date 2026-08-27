@@ -21,10 +21,11 @@ module.exports = {
       exec_mode: 'fork',
       instances: 1,
 
-      // Em produção o logger desliga o pino-pretty e escreve JSON puro, que é
-      // o formato certo para o PM2 capturar em arquivo.
-      // Os segredos continuam vindo do `.env` lido pelo próprio app — não
-      // duplicar WEBHOOK_SECRET aqui, o ecosystem é versionado.
+      // Só o mínimo aqui: variável definida neste bloco tem precedência sobre o
+      // `.env` (`process.loadEnvFile` não sobrescreve o ambiente), então um
+      // LOG_LEVEL/LOG_FORMAT duplicado faria a edição do `.env` parecer não ter
+      // efeito. Os segredos também continuam só no `.env` — o ecosystem é
+      // versionado.
       env: {
         NODE_ENV: 'production',
       },
@@ -43,11 +44,15 @@ module.exports = {
       // Rede de segurança para vazamento de memória em execuções longas.
       max_memory_restart: '500M',
 
+      // Não observar arquivos: `data/` muda a cada mensagem (sessão do Baileys
+      // + WAL do SQLite) e reiniciaria o processo sem parar.
+      watch: false,
+
       out_file: join(__dirname, 'logs/out.log'),
       error_file: join(__dirname, 'logs/error.log'),
       merge_logs: true,
-      // O pino já carimba o timestamp em cada linha; o prefixo do PM2 quebraria
-      // o JSON para quem for parsear os logs.
+      // O pino já carimba o timestamp ISO em cada linha; o prefixo do PM2 só
+      // duplicaria — e quebraria o JSON quando LOG_FORMAT=json.
       time: false,
     },
   ],
