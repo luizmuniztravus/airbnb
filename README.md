@@ -117,6 +117,8 @@ npm run pm2:start      # compila e sobe o processo
 npm run pm2:logs       # o QR do primeiro pareamento aparece aqui
 ```
 
+Numa VPS nova, `scripts/bootstrap-vps.sh` faz tudo isto (e o resto desta seção) de uma vez — veja [Scripts](#scripts).
+
 Sobreviver ao reboot da máquina:
 
 ```bash
@@ -144,6 +146,35 @@ Logs vão para `logs/out.log` e `logs/error.log` (gitignorados) — veja [Logs](
 ### Diretório `data/`
 
 `data/auth_info/` (credenciais do número pareado) e `data/app.db` (eventos + outbox) precisam persistir entre restarts — sem eles o QR volta a cada boot. Faça backup desse diretório e **nunca** o versione.
+
+## Scripts
+
+Dois scripts em `scripts/`, ambos para rodar **na própria VPS**.
+
+### `bootstrap-vps.sh` — VPS nova
+
+```bash
+sudo ./scripts/bootstrap-vps.sh
+```
+
+Faz de uma vez o que a seção anterior descreve manualmente: usuário de sistema dedicado, pacotes de build do `better-sqlite3`, Node, PM2, clone, `npm ci`, build, `.env` com `WEBHOOK_SECRET` gerado, `pm2 startOrReload ecosystem.config.cjs` e `pm2 startup` para sobreviver ao reboot.
+
+É idempotente: reexecutar atualiza o código e recarrega o PM2 **sem tocar em `.env` nem em `data/`** — serve tanto para provisionar quanto para fazer deploy.
+
+Ajustável por variáveis: `APP_USER` (padrão `checkin`), `APP_DIR` (`/opt/checkin-notifier`), `REPO_URL`, `REPO_REF`, `NODE_MAJOR`.
+
+O serviço não roda como root: `data/auth_info/` dá acesso à conta de WhatsApp pareada. Firewall e TLS ficam de fora — o `WEBHOOK_SECRET` viaja em header, então exponha o endpoint por trás de um proxy reverso com HTTPS.
+
+### `whatsapp-qr.sh` — novo pareamento
+
+```bash
+sudo -u checkin ./scripts/whatsapp-qr.sh          # mostra o QR pendente
+sudo -u checkin ./scripts/whatsapp-qr.sh --reset  # apaga a sessão e força um novo
+```
+
+Lê o QR de `GET /whatsapp/status`, não dos logs: o Baileys troca o código a cada ~20s e o endpoint sempre devolve o vigente, então o script redesenha a cada troca e sai sozinho quando o status vira `open`.
+
+Queda normal de sessão (`loggedOut`) já é tratada pelo serviço, que limpa as credenciais e emite um QR novo — nesse caso basta rodar sem flag. O `--reset` é para o serviço travado sem emitir QR; ele recusa apagar qualquer coisa que não esteja dois níveis abaixo da raiz do projeto, o que também protege o `data/` inteiro.
 
 ## Logs
 
