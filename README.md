@@ -75,6 +75,28 @@ Respostas possíveis: `queued` (enfileirado), `duplicate` (já recebido), `store
 - **Retry com backoff** — 6 tentativas (5s, 15s, 45s, …) antes de marcar `failed`.
 - **Payload sempre preservado** — todo webhook é gravado cru na tabela `events`, mesmo que nenhum campo seja reconhecido.
 
+## Testes
+
+```bash
+npm test              # suíte completa
+npm run test:watch    # re-roda ao salvar
+npm run typecheck:tests
+```
+
+Runner nativo do Node (`node:test`) + `tsx` — sem framework extra. Cada arquivo roda em seu próprio processo, com um SQLite temporário criado por `tests/helpers/setup.ts` (que precisa ser o primeiro import: `config/env.ts` valida o ambiente e `db/index.ts` abre o banco já no import).
+
+| Arquivo | O que cobre |
+|---|---|
+| `tests/domain/checkin.test.ts` | Extração tolerante: aliases, aninhamento, coerção, `isUnmapped` |
+| `tests/domain/template.test.ts` | Formato da mensagem, datas, plural, truncagem do payload |
+| `tests/db/events.test.ts` | Gravação e deduplicação por `dedupe_key` |
+| `tests/db/outbox.test.ts` | Fila, backoff (5s → 15s → 45s…), esgotamento em `failed` |
+| `tests/routes/auth.test.ts` | `x-webhook-token`, `Bearer`, comparação em tempo constante |
+| `tests/routes/webhook.test.ts` | Contrato do webhook: `queued` / `duplicate` / `stored_no_target` |
+| `tests/whatsapp/outbox-worker.test.ts` | Worker: envio, retry, e o que acontece com a conexão caída |
+
+O teste do worker troca `whatsapp/client.ts` e `whatsapp/sender.ts` por dublês (`mock.module`, daí a flag `--experimental-test-module-mocks`). Nenhum teste abre socket, toca o Baileys ou fala com o WhatsApp.
+
 ## Mapeando o payload real
 
 `src/domain/checkin.ts` é o **único** arquivo a mudar. Hoje ele procura cada campo em vários nomes possíveis e aceita não achar nada; a mensagem enviada anexa o JSON cru justamente para revelar o formato do provedor.
