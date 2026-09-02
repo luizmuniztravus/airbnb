@@ -55,6 +55,7 @@ Quando o formato estabilizar: colete exemplos com `GET /events`, troque `normali
 
 - **A Cloud API oficial da Meta não envia para grupos**, só para conversas individuais. Por isso o Baileys (WhatsApp Web) está embutido. Não sugira trocar por Cloud API/Twilio enquanto o destino for um grupo.
 - **`baileys` está fixado em `6.7.24`** (dist-tag `legacy`). A `7.0.0-rc*` tem quedas silenciosas de conexão relatadas. Não atualize sem verificar se saiu uma estável.
+- **O serviço escuta em `127.0.0.1` e fica atrás de um proxy reverso com TLS.** O default de `HOST` em `src/config/env.ts` é `0.0.0.0`; quem fecha isso é a linha `HOST=127.0.0.1` do `.env.example`. Não sugira expor a porta direto: `GET /whatsapp/status` devolve a string do QR — quem a capturar pareia o próprio dispositivo na conta — e o `WEBHOOK_SECRET` viaja em header. `GET /events` devolve os payloads completos das reservas.
 - **`data/` é gitignored e contém as credenciais da sessão do WhatsApp** (`data/auth_info/`) além do banco. Nunca versionar, nunca colar conteúdo em logs ou PRs.
 - O número pareado é um chip dedicado. Baileys é não-oficial e o número pode ser bloqueado pela Meta.
 

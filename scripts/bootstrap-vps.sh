@@ -14,6 +14,10 @@
 #   REPO_URL=<url ou caminho local>  origem do clone
 #   REPO_REF=main                    branch/tag a implantar
 #   NODE_MAJOR=24
+#   SWAP=1                           cria swap se a RAM for < 2G e não houver
+#   SWAP_MB=2048                     tamanho da swap criada
+#   UFW=0                            1 = configura o firewall (libera SSH antes)
+#   LOGROTATE=1                      instala e configura o pm2-logrotate
 set -euo pipefail
 
 APP_USER="${APP_USER:-checkin}"
@@ -21,6 +25,13 @@ APP_DIR="${APP_DIR:-/opt/checkin-notifier}"
 REPO_URL="${REPO_URL:-https://github.com/luizmuniztravus/airbnb.git}"
 REPO_REF="${REPO_REF:-main}"
 NODE_MAJOR="${NODE_MAJOR:-24}"
+SWAP="${SWAP:-1}"
+SWAP_MB="${SWAP_MB:-2048}"
+# Desligado por padrão: habilitar firewall numa máquina remota é a forma
+# clássica de se trancar do lado de fora. Só com UFW=1, e sempre liberando
+# SSH antes de ativar.
+UFW="${UFW:-0}"
+LOGROTATE="${LOGROTATE:-1}"
 # Fixo: quem define o nome do processo é o `apps[].name` do ecosystem.
 PM2_APP=checkin-notifier
 
@@ -49,6 +60,32 @@ APP_HOME="$(getent passwd "$APP_USER" | cut -d: -f6)"
 
 # `runuser` não troca HOME sozinho; sem isso o npm tentaria escrever em /root/.npm.
 como_app() { runuser -u "$APP_USER" -- env HOME="$APP_HOME" "$@"; }
+
+# -------------------------------------------------------------------- swap ---
+# `npm ci` compila o better-sqlite3 do zero: não há binário pronto para o Node
+# 24, então o node-gyp roda g++ sobre o sqlite3.c. Numa droplet de 1G sem swap
+# isso é candidato a OOM no meio da instalação — e o erro que aparece
+# ("Killed") não diz que faltou memória.
+ram_mb="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
+swap_mb="$(awk '/SwapTotal/ {print int($2/1024)}' /proc/meminfo)"
+if [[ $SWAP -eq 1 && $ram_mb -lt 2000 && $swap_mb -lt 256 ]]; then
+  if [[ -e /swapfile ]]; then
+    aviso "/swapfile já existe mas não está ativo — deixando como está"
+  else
+    info "RAM de ${ram_mb}M sem swap — criando /swapfile de ${SWAP_MB}M"
+    # fallocate falha em alguns filesystems (ex.: ZFS); dd é o plano B.
+    fallocate -l "${SWAP_MB}M" /swapfile 2>/dev/null ||
+      dd if=/dev/zero of=/swapfile bs=1M count="$SWAP_MB" status=none
+    chmod 600 /swapfile
+    mkswap /swapfile >/dev/null
+    swapon /swapfile
+    # Sem isto a swap some no próximo reboot.
+    grep -qE '^/swapfile ' /etc/fstab || printf '/swapfile none swap sw 0 0\n' >>/etc/fstab
+    info "swap ativa: $(awk '/SwapTotal/ {print int($2/1024)"M"}' /proc/meminfo)"
+  fi
+elif [[ $ram_mb -lt 2000 && $swap_mb -lt 256 ]]; then
+  aviso "RAM de ${ram_mb}M sem swap e SWAP=0 — o npm ci pode ser morto por falta de memória"
+fi
 
 # ------------------------------------------------------- pacotes de sistema --
 info "instalando dependências de sistema"
@@ -116,6 +153,20 @@ fi
 chown "$APP_USER:$APP_USER" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
+# Um `.env` preservado de antes da introdução do HOST não tem a linha, e o
+# default do env.ts é 0.0.0.0 — numa VPS com IP público isso põe o webhook, o
+# GET /events e a string do QR em GET /whatsapp/status na internet, em HTTP
+# puro. Não editamos o arquivo do operador; avisamos.
+HOST_ENV="$(grep -E '^HOST=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)"
+case "${HOST_ENV:-<ausente>}" in
+  127.0.0.1 | localhost | ::1) ;;
+  *)
+    aviso "HOST=${HOST_ENV:-<ausente, default 0.0.0.0>} em $ENV_FILE — o serviço aceita conexões de fora."
+    aviso "  Numa VPS com IP público use HOST=127.0.0.1 e ponha um proxy com TLS na frente:"
+    aviso "  GET /whatsapp/status devolve a string do QR, e o WEBHOOK_SECRET viaja em claro."
+    ;;
+esac
+
 # `data/` guarda credenciais da sessão do WhatsApp: só o dono enxerga.
 como_app mkdir -p "$APP_DIR/data" "$APP_DIR/logs"
 chmod 700 "$APP_DIR/data"
@@ -136,25 +187,66 @@ info "iniciando no PM2"
 (cd "$APP_DIR" && como_app env NODE_ENV=production pm2 startOrReload "$ECOSYSTEM" --update-env)
 como_app pm2 save >/dev/null
 
+# ------------------------------------------------------------- logrotate -----
+# O PM2 não rotaciona nada sozinho: com LOG_FORMAT=pretty e um monitor batendo
+# em /health, logs/out.log cresce até encher o disco da droplet.
+if [[ $LOGROTATE -eq 1 ]]; then
+  if como_app pm2 describe pm2-logrotate >/dev/null 2>&1; then
+    info "pm2-logrotate já instalado"
+  else
+    info "instalando pm2-logrotate"
+    como_app pm2 install pm2-logrotate >/dev/null
+  fi
+  # `set` é idempotente e sobrescreve o valor anterior.
+  como_app pm2 set pm2-logrotate:max_size 10M >/dev/null
+  como_app pm2 set pm2-logrotate:retain 14 >/dev/null
+  como_app pm2 set pm2-logrotate:compress true >/dev/null
+  como_app pm2 set pm2-logrotate:rotateInterval '0 0 * * *' >/dev/null
+  info "rotação: 10M por arquivo, 14 arquivos, comprimidos, giro diário"
+fi
+
 # Unit systemd que ressobe o daemon do PM2 (e os apps salvos) no boot da VPS.
 info "habilitando PM2 no boot"
 pm2 startup systemd -u "$APP_USER" --hp "$APP_HOME"
 
 PORT="$(grep -E '^PORT=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)"
+PORT="${PORT:-3000}"
+
+# --------------------------------------------------------------------- ufw ---
+# Opt-in: numa máquina remota, ativar firewall sem liberar SSH antes tranca o
+# operador do lado de fora. A ordem aqui é deliberada — SSH primeiro, `enable`
+# por último.
+if [[ $UFW -eq 1 ]]; then
+  info "configurando ufw"
+  command -v ufw >/dev/null || apt-get install -y -qq ufw >/dev/null
+  ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null
+  ufw allow 80/tcp >/dev/null
+  ufw allow 443/tcp >/dev/null
+  # A porta do app não entra: quem fala com ela é o proxy, pelo loopback.
+  ufw --force enable >/dev/null
+  info "ufw ativo — liberados 22, 80 e 443; a porta $PORT fica só no loopback"
+else
+  aviso "firewall não configurado (UFW=0). Numa droplet nova o ufw vem inativo:"
+  aviso "  verifique com 'ufw status' — sem ele, qualquer porta em escuta fica pública."
+fi
+
+# Reflete o que está no .env em vez de afirmar 127.0.0.1 sempre.
+ESCUTA="${HOST_ENV:-0.0.0.0}"
 cat <<EOF
 
-Pronto. Serviço em http://127.0.0.1:${PORT:-3000}
+Pronto. Serviço escutando em ${ESCUTA}:${PORT}
 
 Próximos passos:
   1. Parear o WhatsApp:   sudo -u $APP_USER $APP_DIR/scripts/whatsapp-qr.sh
   2. Descobrir o JID:     curl -H "x-webhook-token: \$WEBHOOK_SECRET" \\
-                            localhost:${PORT:-3000}/whatsapp/groups
+                            localhost:${PORT}/whatsapp/groups
   3. Preencher WHATSAPP_GROUP_JID em $ENV_FILE e recarregar:
        sudo -u $APP_USER pm2 reload $PM2_APP --update-env
 
 Logs:   sudo -u $APP_USER pm2 logs $PM2_APP
-Estado: curl localhost:${PORT:-3000}/health
+Estado: curl localhost:${PORT}/health
 
-Este script não abre porta no firewall nem configura TLS. Exponha o webhook
-por um proxy reverso com HTTPS — o WEBHOOK_SECRET viaja no header.
+TLS fica de fora: exponha o webhook por um proxy reverso com HTTPS apontando
+para ${ESCUTA}:${PORT}. O WEBHOOK_SECRET viaja no header, e GET /whatsapp/status
+devolve a string do QR — nada disso pode trafegar em HTTP puro na internet.
 EOF

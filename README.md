@@ -25,6 +25,17 @@ cp .env.example .env
 npm run dev
 ```
 
+| Variável | Padrão | Efeito |
+|---|---|---|
+| `PORT` | `3000` | porta do HTTP |
+| `HOST` | `127.0.0.1` no `.env.example` (`0.0.0.0` se a linha faltar) | interface de escuta |
+| `WEBHOOK_SECRET` | — | obrigatório, mín. 8 caracteres |
+| `WHATSAPP_GROUP_JID` | — | opcional no boot; sem ele os eventos ficam gravados sem envio |
+| `LOG_LEVEL` / `LOG_FORMAT` | `info` / `pretty` | veja [Logs](#logs) |
+| `AUTH_DIR` / `DB_PATH` | `./data/auth_info` / `./data/app.db` | veja [`data/`](#diretório-data) |
+
+`HOST` merece atenção numa VPS: o `.env.example` traz `127.0.0.1`, mas o default do código é `0.0.0.0`, então um `.env` antigo sem a linha escuta em todas as interfaces. Numa máquina com IP público e sem firewall isso põe o webhook, o `GET /events` (payloads completos) e o `GET /whatsapp/status` (**a string do QR**) na internet em HTTP puro.
+
 ### Primeiro pareamento
 
 1. Suba o serviço. Um **QR code aparece no terminal**.
@@ -157,13 +168,29 @@ Dois scripts em `scripts/`, ambos para rodar **na própria VPS**.
 sudo ./scripts/bootstrap-vps.sh
 ```
 
-Faz de uma vez o que a seção anterior descreve manualmente: usuário de sistema dedicado, pacotes de build do `better-sqlite3`, Node, PM2, clone, `npm ci`, build, `.env` com `WEBHOOK_SECRET` gerado, `pm2 startOrReload ecosystem.config.cjs` e `pm2 startup` para sobreviver ao reboot.
+Faz de uma vez o que a seção anterior descreve manualmente: usuário de sistema dedicado, swap se a máquina for pequena, pacotes de build do `better-sqlite3`, Node, PM2, clone, `npm ci`, build, `.env` com `WEBHOOK_SECRET` gerado, `pm2 startOrReload ecosystem.config.cjs`, `pm2-logrotate` configurado e `pm2 startup` para sobreviver ao reboot.
 
 É idempotente: reexecutar atualiza o código e recarrega o PM2 **sem tocar em `.env` nem em `data/`** — serve tanto para provisionar quanto para fazer deploy.
 
-Ajustável por variáveis: `APP_USER` (padrão `checkin`), `APP_DIR` (`/opt/checkin-notifier`), `REPO_URL`, `REPO_REF`, `NODE_MAJOR`.
+Ajustável por variáveis:
 
-O serviço não roda como root: `data/auth_info/` dá acesso à conta de WhatsApp pareada. Firewall e TLS ficam de fora — o `WEBHOOK_SECRET` viaja em header, então exponha o endpoint por trás de um proxy reverso com HTTPS.
+| Variável | Padrão | Efeito |
+|---|---|---|
+| `APP_USER` | `checkin` | usuário de sistema dono da aplicação |
+| `APP_DIR` | `/opt/checkin-notifier` | onde o código fica |
+| `REPO_URL` / `REPO_REF` | repo / `main` | origem e branch do clone |
+| `NODE_MAJOR` | `24` | versão do Node instalada via NodeSource |
+| `SWAP` / `SWAP_MB` | `1` / `2048` | cria `/swapfile` se a RAM for < 2 G e não houver swap |
+| `UFW` | `0` | `1` configura o firewall (libera SSH **antes** de ativar) |
+| `LOGROTATE` | `1` | instala e configura o `pm2-logrotate` |
+
+O serviço não roda como root: `data/auth_info/` dá acesso à conta de WhatsApp pareada.
+
+**Swap.** O `npm ci` compila o `better-sqlite3` do zero — não há binário pronto para o Node 24, então o node-gyp roda o g++ sobre o `sqlite3.c`. Numa droplet de 1 G sem swap isso pode ser morto por falta de memória, e a mensagem (`Killed`) não diz o motivo. Por isso o script cria swap sozinho quando a RAM é pequena; `SWAP=0` desliga.
+
+**Firewall.** Fica em `UFW=0` de propósito: ativar firewall numa máquina remota sem liberar SSH antes é a forma clássica de se trancar do lado de fora. Com `UFW=1` o script libera 22, 80 e 443 e só então ativa — a porta do app não entra, porque quem fala com ela é o proxy, pelo loopback. Numa droplet nova o ufw vem **inativo**; confira com `ufw status`.
+
+**TLS.** Fica de fora. Exponha o webhook por um proxy reverso com HTTPS apontando para `127.0.0.1:3000`. Isso não é zelo excessivo: o `WEBHOOK_SECRET` viaja em header e `GET /whatsapp/status` devolve a string do QR — quem a capturar pareia o próprio dispositivo na conta de WhatsApp.
 
 ### `whatsapp-qr.sh` — novo pareamento
 
@@ -207,11 +234,12 @@ Detalhes que ajudam no diagnóstico remoto:
 
 ### Rotação
 
-O PM2 não rotaciona nada sozinho — sem isto `logs/out.log` cresce até encher o disco:
+O PM2 não rotaciona nada sozinho — sem isto `logs/out.log` cresce até encher o disco. O `bootstrap-vps.sh` já faz isto (desligue com `LOGROTATE=0`); à mão, é:
 
 ```bash
 pm2 install pm2-logrotate
 pm2 set pm2-logrotate:max_size 10M
 pm2 set pm2-logrotate:retain 14
 pm2 set pm2-logrotate:compress true
+pm2 set pm2-logrotate:rotateInterval '0 0 * * *'
 ```
