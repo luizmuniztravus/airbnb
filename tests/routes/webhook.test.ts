@@ -106,7 +106,7 @@ describe('POST /webhooks/nova-reserva — enfileiramento', () => {
 
     assert.equal(res.json().status, 'queued')
     const row = getOutboxRow((res.json() as { outboxId: number }).outboxId)
-    assert.match(row.body, /não mapeado/)
+    assert.match(row.body, /Formato não reconhecido/)
   })
 
   test('aceita corpo vazio sem virar 500', async () => {
@@ -141,6 +141,7 @@ describe('POST /webhooks/nova-reserva — chave de deduplicação', () => {
       [{ confirmation_code: 'C1' }, 'nova-reserva:C1'],
       [{ reservation_code: 'RC1' }, 'nova-reserva:RC1'],
       [{ uuid: 'U1' }, 'nova-reserva:U1'],
+      [{ booking_uuid: 'BU1' }, 'nova-reserva:BU1'],
     ]
 
     for (const [payload, esperado] of casos) {
@@ -166,6 +167,34 @@ describe('POST /webhooks/nova-reserva — chave de deduplicação', () => {
     await post({ id: '   ' })
     const [chave] = dedupeKeys()
     assert.match(chave ?? '', /^nova-reserva:sha256:/)
+  })
+
+  test('reprocessamento no provedor não escapa da deduplicação', async () => {
+    // Payload real: o id da reserva vem em `booking_uuid`, e o corpo carrega
+    // `_workflow_execution_id`, que muda a cada execução do workflow. Enquanto
+    // `booking_uuid` não era reconhecido, a chave era o hash do corpo inteiro —
+    // então reprocessar a mesma reserva gerava chave nova e o grupo recebia a
+    // mensagem duas vezes.
+    const reserva = {
+      guest_name: 'Fulano de Tal',
+      property_name: 'Chalé 01',
+      check_in: '26/10/2026',
+      check_out: '28/10/2026',
+      booking_uuid: '049f6f2f-fa2b-4011-93ab-e3cd0ca7e347',
+      _workflow_id: 38,
+      _workflow_execution_id: 968,
+    }
+
+    const primeira = await post(reserva)
+    assert.equal(primeira.json().status, 'queued')
+
+    // Mesma reserva, outra execução do workflow: corpo diferente, reserva igual.
+    const segunda = await post({ ...reserva, _workflow_execution_id: 969 })
+    assert.equal(segunda.json().status, 'duplicate')
+
+    assert.deepEqual(dedupeKeys(), [
+      'nova-reserva:049f6f2f-fa2b-4011-93ab-e3cd0ca7e347',
+    ])
   })
 })
 

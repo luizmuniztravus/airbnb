@@ -15,6 +15,11 @@ const ID_FIELDS = [
   'event_id',
   'reservation_id',
   'booking_id',
+  // O provedor real (workflow do PMS) manda o id da reserva neste nome. Sem
+  // ele a chave caía no SHA-256 do corpo, que inclui `_workflow_execution_id`
+  // — valor que muda a cada execução, fazendo um reprocessamento da mesma
+  // reserva escapar da deduplicação e duplicar a mensagem no grupo.
+  'booking_uuid',
   'confirmation_code',
   'reservation_code',
   'uuid',

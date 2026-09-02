@@ -47,9 +47,15 @@ A sutileza: um evento repetido só é rejeitado se **já gerou mensagem** (`hasM
 
 ### `src/domain/checkin.ts` é o ponto de refatoração
 
-O payload real do provedor ainda não é conhecido. `normalizeCheckin` faz busca tolerante do mesmo campo em vários nomes e aninhamentos (`guest.name`, `hospede.nome`, `guest_name`…), aceita não achar nada, e `template.ts` anexa o JSON cru na mensagem para revelar o formato na prática.
+`normalizeCheckin` faz busca tolerante do mesmo campo em vários nomes e aninhamentos (`guest.name`, `hospede.nome`, `guest_name`…) e aceita não achar nada.
 
-Quando o formato estabilizar: colete exemplos com `GET /events`, troque `normalizeCheckin` por um parse estrito com zod usando-os como fixtures, e remova o bloco `_payload:_` de `template.ts`. **Nada fora desses dois arquivos deve precisar mudar** — se precisar, algo vazou de camada.
+O primeiro payload real já é conhecido — um workflow de PMS entregando reservas do Booking, com `guest_name`, `property_name`, `guest_phone`, `booking_uuid`, datas em `dd/mm/aaaa` e números como texto (`"guests": "2"`). Está congelado como fixture em `tests/domain/checkin.test.ts` e `tests/domain/template.test.ts`. O bloco `_payload:_` que ia anexado na mensagem **já foi removido**: ele existia para revelar esse formato.
+
+A busca tolerante **continua** de propósito. Há um exemplo de um canal só; um parse estrito com zod agora rejeitaria variações ainda não vistas (outros canais, cancelamento, alteração de reserva). A rede de segurança é a linha `⚠️ Formato não reconhecido` da mensagem, mais o `warn` em `routes/webhook.ts` — se aparecerem, o formato mudou e há payload novo em `GET /events`.
+
+Ao ajustar campos, **nada fora de `checkin.ts` e `template.ts` deve precisar mudar** — se precisar, algo vazou de camada. A exceção conhecida é `ID_FIELDS` em `routes/webhook.ts`, que é chave de deduplicação, não exibição.
+
+**Cuidado com a chave de deduplicação.** O corpo desse provedor inclui `_workflow_execution_id`, que muda a cada execução. Se o campo de id da reserva não estiver em `ID_FIELDS`, a chave cai no SHA-256 do corpo inteiro e um reprocessamento vira mensagem duplicada no grupo. Foi o que aconteceu com `booking_uuid` antes de ele ser adicionado.
 
 ## Restrições que não são negociáveis
 

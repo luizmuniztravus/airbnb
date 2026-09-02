@@ -17,6 +17,7 @@ export type CheckinEvent = {
   checkIn?: string
   checkOut?: string
   hospedes?: number
+  telefone?: string
   codigo?: string
   canal?: string
   /** Payload original, sempre preservado. */
@@ -73,6 +74,7 @@ export function normalizeCheckin(raw: unknown): CheckinEvent {
       'listing.name',
       'listing.title',
       'listing_name',
+      'property_name',
       'property.name',
       'property',
       'imovel.nome',
@@ -111,6 +113,14 @@ export function normalizeCheckin(raw: unknown): CheckinEvent {
       'adults',
       'pax',
     ]),
+    telefone: pickString(raw, [
+      'guest_phone',
+      'guest.phone',
+      'phone',
+      'telefone',
+      'celular',
+      'hospede.telefone',
+    ]),
     codigo: pickString(raw, [
       'confirmation_code',
       'reservation_code',
@@ -118,6 +128,7 @@ export function normalizeCheckin(raw: unknown): CheckinEvent {
       'code',
       'reservation_id',
       'booking_id',
+      'booking_uuid',
       'id',
     ]),
     canal: pickString(raw, [

@@ -19,18 +19,82 @@ describe('formatCheckinMessage', () => {
         check_out: '2026-08-30',
         guests: 2,
         channel: 'Airbnb',
+        guest_phone: '+55 11 90000 0000',
       }),
     )
 
     const linhas = msg.split('\n')
-    assert.equal(linhas[0], '✅ *Check-in realizado*')
+    assert.equal(linhas[0], '🎉 *Nova reserva confirmada*')
     assert.equal(linhas[1], '')
-    assert.equal(linhas[2], '👤 João Silva')
-    assert.equal(linhas[3], '🏠 Apto 302')
-    assert.equal(linhas[4], '📅 27/08/2026 → 30/08/2026')
+    assert.equal(linhas[2], '🏠 Apto 302')
+    assert.equal(linhas[3], '📅 27/08/2026 → 30/08/2026')
+    assert.equal(linhas[4], '👤 João Silva')
     assert.equal(linhas[5], '👥 2 hóspedes')
-    assert.equal(linhas[6], '🔖 RES-001')
-    assert.equal(linhas[7], '🌐 Airbnb')
+    assert.equal(linhas[6], '🌐 Airbnb')
+    assert.equal(linhas[7], '📱 +55 11 90000 0000')
+    assert.equal(linhas.length, 8, 'nada além disso — o payload cru não vai mais na mensagem')
+  })
+
+  test('payload real do provedor: todos os campos pedidos aparecem', () => {
+    // Fixture capturada em produção (dados trocados por fictícios).
+    const msg = formatCheckinMessage(
+      normalizeCheckin({
+        guest_name: 'Fulano de Tal',
+        guest_email: 'fulano@guest.booking.com',
+        guest_phone: '+55 11 94863 6475',
+        property_name: 'Chalé 01',
+        check_in: '26/10/2026',
+        check_out: '28/10/2026',
+        nights: '2',
+        guests: '2',
+        total_price: '420,00',
+        channel: 'booking',
+        status: 'confirmed',
+        cancellation_reason: '',
+        booking_uuid: '049f6f2f-fa2b-4011-93ab-e3cd0ca7e347',
+        property_uuid: 'e6239657-2817-4c41-82c0-2b52b069bfa9',
+        fnrh_precheckin_link: '',
+        _workflow_id: 38,
+        _workflow_execution_id: 968,
+      }),
+    )
+
+    assert.equal(
+      msg,
+      [
+        '🎉 *Nova reserva confirmada*',
+        '',
+        '🏠 Chalé 01',
+        '📅 26/10/2026 → 28/10/2026',
+        '👤 Fulano de Tal',
+        '👥 2 hóspedes',
+        '🌐 Booking',
+        '📱 +55 11 94863 6475',
+      ].join('\n'),
+    )
+  })
+
+  test('não vaza campos que não foram pedidos na mensagem', () => {
+    const msg = formatCheckinMessage(
+      normalizeCheckin({
+        guest_name: 'Fulano',
+        guest_email: 'fulano@guest.booking.com',
+        total_price: '420,00',
+        booking_uuid: '049f6f2f-fa2b-4011-93ab-e3cd0ca7e347',
+        property_uuid: 'e6239657-2817-4c41-82c0-2b52b069bfa9',
+      }),
+    )
+
+    // E-mail, valor e UUIDs ficam no banco, não no grupo.
+    assert.doesNotMatch(msg, /guest\.booking\.com/)
+    assert.doesNotMatch(msg, /420/)
+    assert.doesNotMatch(msg, /049f6f2f/)
+    assert.doesNotMatch(msg, /e6239657/)
+  })
+
+  test('canal em minúscula sai capitalizado', () => {
+    assert.match(formatCheckinMessage(normalizeCheckin({ channel: 'booking' })), /🌐 Booking/)
+    assert.match(formatCheckinMessage(normalizeCheckin({ channel: 'Airbnb' })), /🌐 Airbnb/)
   })
 
   test('converte yyyy-mm-dd para dd/mm/aaaa', () => {
@@ -75,54 +139,51 @@ describe('formatCheckinMessage', () => {
     }
   })
 
-  test('avisa quando o payload não foi mapeado', () => {
+  test('avisa quando o formato não foi reconhecido', () => {
     const msg = formatCheckinMessage(normalizeCheckin({ foo: 'bar' }))
-    assert.match(msg, /⚠️ _Payload ainda não mapeado/)
+    assert.match(msg, /⚠️ _Formato não reconhecido/)
+    assert.match(msg, /GET \/events/)
+  })
+
+  test('o aviso de formato desconhecido não deixa linha em branco sobrando', () => {
+    const linhas = formatCheckinMessage(normalizeCheckin({ foo: 'bar' })).split('\n')
+    // cabeçalho, separador, aviso, ponteiro para /events — nada a mais.
+    assert.equal(linhas.length, 4)
+    assert.equal(linhas[2]?.startsWith('⚠️'), true)
   })
 
   test('não avisa quando algum campo-âncora foi reconhecido', () => {
     const msg = formatCheckinMessage(normalizeCheckin({ guest_name: 'Ana' }))
-    assert.doesNotMatch(msg, /não mapeado/)
+    assert.doesNotMatch(msg, /não reconhecido/)
   })
 
-  test('anexa o payload cru em bloco de código', () => {
-    const raw = { id: 'RES-9', nested: { a: 1 } }
-    const msg = formatCheckinMessage(normalizeCheckin(raw))
-    assert.match(msg, /_payload:_/)
-    assert.match(msg, /```/)
-    assert.match(msg, /"id": "RES-9"/)
+  test('o payload cru não vai mais anexado na mensagem', () => {
+    const msg = formatCheckinMessage(normalizeCheckin({ id: 'RES-9', nested: { a: 1 } }))
+    assert.doesNotMatch(msg, /_payload:_/)
+    assert.doesNotMatch(msg, /```/)
+    assert.doesNotMatch(msg, /RES-9/)
   })
 
-  test('trunca payloads gigantes para não estourar a mensagem', () => {
+  test('payload gigante não infla a mensagem', () => {
     const raw = { itens: Array.from({ length: 500 }, (_, i) => `item-${i}`) }
     const msg = formatCheckinMessage(normalizeCheckin(raw))
-
-    assert.match(msg, /… \(truncado\)/)
-    // O JSON completo teria bem mais que o limite de 1500 caracteres.
-    assert.ok(JSON.stringify(raw, null, 2).length > 1500)
-    assert.ok(msg.length < 2000, `mensagem ficou com ${msg.length} caracteres`)
-  })
-
-  test('não trunca payload dentro do limite', () => {
-    const msg = formatCheckinMessage(normalizeCheckin({ id: 'RES-1' }))
+    // Antes o JSON cru ia junto e precisava ser truncado em 1500 caracteres;
+    // agora o tamanho não depende mais do payload.
+    assert.ok(JSON.stringify(raw).length > 1500)
+    assert.ok(msg.length < 300, `mensagem ficou com ${msg.length} caracteres`)
     assert.doesNotMatch(msg, /truncado/)
   })
 
-  test('formata payload null', () => {
+  test('payload null vira mensagem, não exceção', () => {
     const msg = formatCheckinMessage(normalizeCheckin(null))
-    assert.match(msg, /✅ \*Check-in realizado\*/)
-    assert.match(msg, /null/)
+    assert.match(msg, /🎉 \*Nova reserva confirmada\*/)
   })
 
-  test(
-    'raw undefined deveria virar mensagem, não exceção',
-    // JSON.stringify(undefined) devolve undefined e `truncate` estoura em
-    // `text.length`. Hoje é inalcançável pela rota (`req.body ?? {}`), mas
-    // deixa a função frágil para qualquer outro chamador.
-    { todo: 'tratar em template.ts: JSON.stringify(evt.raw) pode ser undefined' },
-    () => {
-      const msg = formatCheckinMessage({ raw: undefined })
-      assert.match(msg, /✅ \*Check-in realizado\*/)
-    },
-  )
+  test('raw undefined vira mensagem, não exceção', () => {
+    // Antes isto estourava: JSON.stringify(undefined) devolve undefined e a
+    // truncagem quebrava em `text.length`. Sem o bloco de payload, não há mais
+    // como chegar lá.
+    const msg = formatCheckinMessage({ raw: undefined })
+    assert.match(msg, /🎉 \*Nova reserva confirmada\*/)
+  })
 })

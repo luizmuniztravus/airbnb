@@ -43,6 +43,46 @@ describe('normalizeCheckin', () => {
     assert.equal(evt.canal, 'Booking')
   })
 
+  test('extrai o payload real do provedor', () => {
+    // Fixture capturada em produção (dados trocados por fictícios). Antes de
+    // `property_name`, `guest_phone` e `booking_uuid` entrarem nas listas, o
+    // imóvel, o telefone e o código saíam como undefined.
+    const evt = normalizeCheckin({
+      guest_name: 'Fulano de Tal',
+      guest_email: 'fulano@guest.booking.com',
+      guest_phone: '+55 11 94863 6475',
+      property_name: 'Chalé 01',
+      check_in: '26/10/2026',
+      check_out: '28/10/2026',
+      nights: '2',
+      guests: '2',
+      total_price: '420,00',
+      channel: 'booking',
+      status: 'confirmed',
+      booking_uuid: '049f6f2f-fa2b-4011-93ab-e3cd0ca7e347',
+      property_uuid: 'e6239657-2817-4c41-82c0-2b52b069bfa9',
+      _workflow_id: 38,
+      _workflow_execution_id: 968,
+    })
+
+    assert.equal(evt.hospede, 'Fulano de Tal')
+    assert.equal(evt.imovel, 'Chalé 01')
+    assert.equal(evt.checkIn, '26/10/2026')
+    assert.equal(evt.checkOut, '28/10/2026')
+    // Vem como texto no payload e é convertido para número.
+    assert.equal(evt.hospedes, 2)
+    assert.equal(evt.telefone, '+55 11 94863 6475')
+    assert.equal(evt.codigo, '049f6f2f-fa2b-4011-93ab-e3cd0ca7e347')
+    assert.equal(evt.canal, 'booking')
+    assert.equal(isUnmapped(evt), false)
+  })
+
+  test('telefone é lido dos nomes alternativos', () => {
+    assert.equal(normalizeCheckin({ guest: { phone: '+5511900000000' } }).telefone, '+5511900000000')
+    assert.equal(normalizeCheckin({ celular: '11 90000-0000' }).telefone, '11 90000-0000')
+    assert.equal(normalizeCheckin({ guest_name: 'Ana' }).telefone, undefined)
+  })
+
   test('lê caminhos aninhados (dates.start / dates.end)', () => {
     const evt = normalizeCheckin({ dates: { start: '2026-01-10', end: '2026-01-12' } })
     assert.equal(evt.checkIn, '2026-01-10')
