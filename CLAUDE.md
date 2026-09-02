@@ -20,7 +20,9 @@ Antes de considerar qualquer mudança pronta: `npm run typecheck` **e** `npm tes
 
 Os testes usam o runner nativo do Node — sem framework. Cada arquivo roda em processo próprio, com SQLite temporário criado por `tests/helpers/setup.ts`, que **precisa ser o primeiro import**: `config/env.ts` valida o ambiente (e faz `process.exit(1)` se faltar variável) e `db/index.ts` abre o banco já no momento do import. O teste do worker troca `whatsapp/client.ts` e `whatsapp/sender.ts` por dublês via `mock.module` — daí a flag `--experimental-test-module-mocks` no script. Nenhum teste abre socket nem fala com o WhatsApp.
 
-A CI (`.github/workflows/ci.yml`) roda typecheck, testes e build em Node 22 e 24, mais um job que barra `.env`/`data/` versionados e o baileys fora do 6.7.24.
+A CI (`.github/workflows/ci.yml`) roda typecheck e build em Node 22 e 24, mais um job que barra `.env`/`data/` versionados e o baileys fora do 6.7.24.
+
+**A suíte só roda no Node 24.** No 22 o `mock.module` não expõe os named exports do dublê para quem importa estaticamente, e `src/whatsapp/outbox.ts` importa `getStatus`/`isConnected` de `./client.js` assim — o arquivo do worker nem carrega. Isso é limitação do dublê, não da aplicação: no 22 o typecheck e o build passam e 80 dos 82 testes rodam, e por isso `engines` continua em `>=22`. Se for preciso rodar a suíte no 22, o caminho é trocar `mock.module` por injeção de dependência em `startOutboxWorker` — não mexer no especificador do mock, que já foi testado e não resolve.
 
 Complementando, o fluxo manual de `curl` do README continua válido para checar o contrato ponta a ponta (webhook → `queued` → `duplicate` no reenvio).
 
