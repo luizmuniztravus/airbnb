@@ -1,4 +1,4 @@
-import { isUnmapped, type CheckinEvent } from './checkin.js'
+import { isCancelamento, isUnmapped, type CheckinEvent } from './checkin.js'
 
 /** ISO ou yyyy-mm-dd → dd/mm/aaaa. Qualquer outro formato passa intacto. */
 function formatDate(value: string | undefined): string | undefined {
@@ -15,7 +15,12 @@ function capitalizar(value: string): string {
 }
 
 export function formatCheckinMessage(evt: CheckinEvent): string {
-  const cabecalho = ['🎉 *Nova reserva confirmada*', '']
+  // Mesmo webhook, dois eventos: o título é o que separa um do outro no grupo.
+  const titulo = isCancelamento(evt)
+    ? '❌ *Cancelamento de Reserva*'
+    : '✅ *Nova Reserva Realizada*'
+
+  const cabecalho = [titulo, '']
   const lines: string[] = []
 
   if (evt.imovel) lines.push(`🏠 ${evt.imovel}`)
@@ -31,7 +36,7 @@ export function formatCheckinMessage(evt: CheckinEvent): string {
     lines.push(`👥 ${evt.hospedes} ${evt.hospedes === 1 ? 'hóspede' : 'hóspedes'}`)
   }
   if (evt.canal) lines.push(`🌐 ${capitalizar(evt.canal)}`)
-  if (evt.telefone) lines.push(`📱 ${evt.telefone}`)
+  if (evt.telefone) lines.push(`☎️ ${evt.telefone}`)
 
   // Sem o JSON cru anexado, esta linha passa a ser o único sinal no grupo de
   // que chegou um formato desconhecido — o payload continua inteiro no banco.

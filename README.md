@@ -125,6 +125,23 @@ O primeiro formato real já está mapeado — um workflow de PMS entregando rese
 
 Repare em três detalhes que o código já trata: datas em `dd/mm/aaaa` (não ISO), números como texto (`"2"`), e o id da reserva em `booking_uuid` — que **precisa** estar em `ID_FIELDS` de `src/routes/webhook.ts`, senão a chave de deduplicação cai no hash do corpo, que inclui o `_workflow_execution_id` volátil, e um reprocessamento duplica a mensagem no grupo.
 
+### Reserva e cancelamento
+
+O mesmo webhook entrega os dois, mudando o `status`. O título da mensagem muda junto:
+
+```
+✅ *Nova Reserva Realizada*        ❌ *Cancelamento de Reserva*
+
+🏠 Chalé 01                        🏠 Chalé 01
+📅 26/10/2026 → 28/10/2026         📅 26/10/2026 → 28/10/2026
+👤 Luiz Filippe Muniz Bezerra      👤 Luiz Filippe Muniz Bezerra
+👥 2 hóspedes                      👥 2 hóspedes
+🌐 Booking                         🌐 Booking
+☎️ +55 11 94863 6475               ☎️ +55 11 94863 6475
+```
+
+O cancelamento chega com o **mesmo `booking_uuid`** da reserva. Por isso a chave de deduplicação ganha um sufixo de status quando ele não é `confirmed` — sem isso o cancelamento seria descartado como duplicata da reserva original e o grupo nunca saberia. O motivo (`cancellation_reason`) fica no banco e não vai para o grupo.
+
 Quando aparecer um formato novo:
 
 1. Colete o exemplo: `curl -H "x-webhook-token: ..." localhost:3000/events`

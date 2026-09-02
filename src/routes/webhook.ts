@@ -25,15 +25,36 @@ const ID_FIELDS = [
   'uuid',
 ]
 
+/**
+ * Sufixo de status para a chave de deduplicação.
+ *
+ * O cancelamento chega com o MESMO id da reserva original. Sem isto, a segunda
+ * mensagem seria descartada como duplicata e o grupo nunca saberia do
+ * cancelamento. `confirmed` (e a ausência de status) não recebem sufixo, para
+ * não invalidar as chaves já gravadas das reservas existentes.
+ */
+function statusSuffix(payload: unknown): string {
+  if (payload === null || typeof payload !== 'object') return ''
+  const status = (payload as Record<string, unknown>)['status']
+  if (typeof status !== 'string') return ''
+  const normalizado = status.trim().toLowerCase()
+  if (normalizado === '' || normalizado === 'confirmed') return ''
+  return `:${normalizado}`
+}
+
 function resolveDedupeKey(payload: unknown, rawJson: string): string {
   if (payload !== null && typeof payload === 'object') {
     const record = payload as Record<string, unknown>
+    const sufixo = statusSuffix(payload)
     for (const field of ID_FIELDS) {
       const value = record[field]
-      if (typeof value === 'string' && value.trim() !== '') return `${SOURCE}:${value.trim()}`
-      if (typeof value === 'number') return `${SOURCE}:${value}`
+      if (typeof value === 'string' && value.trim() !== '') {
+        return `${SOURCE}:${value.trim()}${sufixo}`
+      }
+      if (typeof value === 'number') return `${SOURCE}:${value}${sufixo}`
     }
   }
+  // O hash já cobre o corpo inteiro, status incluso — não precisa de sufixo.
   return `${SOURCE}:sha256:${createHash('sha256').update(rawJson).digest('hex')}`
 }
 

@@ -24,14 +24,14 @@ describe('formatCheckinMessage', () => {
     )
 
     const linhas = msg.split('\n')
-    assert.equal(linhas[0], '🎉 *Nova reserva confirmada*')
+    assert.equal(linhas[0], '✅ *Nova Reserva Realizada*')
     assert.equal(linhas[1], '')
     assert.equal(linhas[2], '🏠 Apto 302')
     assert.equal(linhas[3], '📅 27/08/2026 → 30/08/2026')
     assert.equal(linhas[4], '👤 João Silva')
     assert.equal(linhas[5], '👥 2 hóspedes')
     assert.equal(linhas[6], '🌐 Airbnb')
-    assert.equal(linhas[7], '📱 +55 11 90000 0000')
+    assert.equal(linhas[7], '☎️ +55 11 90000 0000')
     assert.equal(linhas.length, 8, 'nada além disso — o payload cru não vai mais na mensagem')
   })
 
@@ -62,14 +62,14 @@ describe('formatCheckinMessage', () => {
     assert.equal(
       msg,
       [
-        '🎉 *Nova reserva confirmada*',
+        '✅ *Nova Reserva Realizada*',
         '',
         '🏠 Chalé 01',
         '📅 26/10/2026 → 28/10/2026',
         '👤 Fulano de Tal',
         '👥 2 hóspedes',
         '🌐 Booking',
-        '📱 +55 11 94863 6475',
+        '☎️ +55 11 94863 6475',
       ].join('\n'),
     )
   })
@@ -90,6 +90,71 @@ describe('formatCheckinMessage', () => {
     assert.doesNotMatch(msg, /420/)
     assert.doesNotMatch(msg, /049f6f2f/)
     assert.doesNotMatch(msg, /e6239657/)
+  })
+
+  test('cancelamento (issue #9) troca o título e mantém os campos', () => {
+    const msg = formatCheckinMessage(
+      normalizeCheckin({
+        guest_name: 'Fulano de Tal',
+        guest_phone: '+55 11 94863 6475',
+        property_name: 'Chalé 01',
+        check_in: '26/10/2026',
+        check_out: '28/10/2026',
+        guests: '2',
+        channel: 'booking',
+        status: 'cancelled',
+        cancellation_reason: 'Cancelado pelo hóspede',
+        booking_uuid: '049f6f2f-fa2b-4011-93ab-e3cd0ca7e347',
+      }),
+    )
+
+    assert.equal(
+      msg,
+      [
+        '❌ *Cancelamento de Reserva*',
+        '',
+        '🏠 Chalé 01',
+        '📅 26/10/2026 → 28/10/2026',
+        '👤 Fulano de Tal',
+        '👥 2 hóspedes',
+        '🌐 Booking',
+        '☎️ +55 11 94863 6475',
+      ].join('\n'),
+    )
+  })
+
+  test('grafias de cancelamento e o motivo isolado', () => {
+    const comStatus = (status: string) =>
+      formatCheckinMessage(normalizeCheckin({ guest_name: 'Ana', status }))
+
+    for (const s of ['cancelled', 'canceled', 'Cancelado', 'CANCELADA', ' cancelled ']) {
+      assert.match(comStatus(s), /❌ \*Cancelamento de Reserva\*/, `status: ${s}`)
+    }
+    for (const s of ['confirmed', 'pending', '']) {
+      assert.match(comStatus(s), /✅ \*Nova Reserva Realizada\*/, `status: ${s}`)
+    }
+
+    // Motivo preenchido basta, mesmo com status que não conhecemos.
+    assert.match(
+      formatCheckinMessage(
+        normalizeCheckin({ guest_name: 'Ana', status: 'xpto', cancellation_reason: 'No-show' }),
+      ),
+      /❌ \*Cancelamento de Reserva\*/,
+    )
+    // `cancellation_reason` vazio não pode virar cancelamento.
+    assert.match(
+      formatCheckinMessage(
+        normalizeCheckin({ guest_name: 'Ana', status: 'confirmed', cancellation_reason: '' }),
+      ),
+      /✅ \*Nova Reserva Realizada\*/,
+    )
+  })
+
+  test('o motivo do cancelamento não vai para o grupo', () => {
+    const msg = formatCheckinMessage(
+      normalizeCheckin({ guest_name: 'Ana', status: 'cancelled', cancellation_reason: 'Motivo sigiloso' }),
+    )
+    assert.doesNotMatch(msg, /Motivo sigiloso/)
   })
 
   test('canal em minúscula sai capitalizado', () => {
@@ -176,7 +241,7 @@ describe('formatCheckinMessage', () => {
 
   test('payload null vira mensagem, não exceção', () => {
     const msg = formatCheckinMessage(normalizeCheckin(null))
-    assert.match(msg, /🎉 \*Nova reserva confirmada\*/)
+    assert.match(msg, /✅ \*Nova Reserva Realizada\*/)
   })
 
   test('raw undefined vira mensagem, não exceção', () => {
@@ -184,6 +249,6 @@ describe('formatCheckinMessage', () => {
     // truncagem quebrava em `text.length`. Sem o bloco de payload, não há mais
     // como chegar lá.
     const msg = formatCheckinMessage({ raw: undefined })
-    assert.match(msg, /🎉 \*Nova reserva confirmada\*/)
+    assert.match(msg, /✅ \*Nova Reserva Realizada\*/)
   })
 })

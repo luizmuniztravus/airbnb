@@ -169,6 +169,48 @@ describe('POST /webhooks/nova-reserva — chave de deduplicação', () => {
     assert.match(chave ?? '', /^nova-reserva:sha256:/)
   })
 
+  test('cancelamento não é engolido como duplicata da reserva', async () => {
+    // O provedor manda o MESMO booking_uuid na reserva e no cancelamento. Sem
+    // o status na chave, o segundo evento casaria com o primeiro e o grupo
+    // nunca saberia do cancelamento.
+    const uuid = '049f6f2f-fa2b-4011-93ab-e3cd0ca7e347'
+    const base = { guest_name: 'Fulano', property_name: 'Chalé 01', booking_uuid: uuid }
+
+    const reserva = await post({ ...base, status: 'confirmed', cancellation_reason: '' })
+    assert.equal(reserva.json().status, 'queued')
+
+    const cancelamento = await post({ ...base, status: 'cancelled', cancellation_reason: 'Desistiu' })
+    assert.equal(cancelamento.json().status, 'queued', 'o cancelamento precisa gerar mensagem própria')
+
+    assert.deepEqual(dedupeKeys().sort(), [
+      `nova-reserva:${uuid}`,
+      `nova-reserva:${uuid}:cancelled`,
+    ].sort())
+
+    // E cada um gerou a sua mensagem, com o título certo.
+    const msgReserva = getOutboxRow((reserva.json() as { outboxId: number }).outboxId).body
+    const msgCancel = getOutboxRow((cancelamento.json() as { outboxId: number }).outboxId).body
+    assert.match(msgReserva, /✅ \*Nova Reserva Realizada\*/)
+    assert.match(msgCancel, /❌ \*Cancelamento de Reserva\*/)
+  })
+
+  test('o cancelamento repetido continua sendo deduplicado', async () => {
+    const base = {
+      guest_name: 'Fulano',
+      booking_uuid: '049f6f2f-fa2b-4011-93ab-e3cd0ca7e347',
+      status: 'cancelled',
+    }
+    assert.equal((await post(base)).json().status, 'queued')
+    assert.equal((await post(base)).json().status, 'duplicate')
+  })
+
+  test('status confirmed não muda a chave já usada pelas reservas existentes', async () => {
+    // Sufixo só para status que não é confirmação: um `.env` em produção já tem
+    // eventos gravados com a chave sem sufixo, e mudá-la duplicaria mensagens.
+    await post({ booking_uuid: 'BU-9', status: 'confirmed' })
+    assert.deepEqual(dedupeKeys(), ['nova-reserva:BU-9'])
+  })
+
   test('reprocessamento no provedor não escapa da deduplicação', async () => {
     // Payload real: o id da reserva vem em `booking_uuid`, e o corpo carrega
     // `_workflow_execution_id`, que muda a cada execução do workflow. Enquanto

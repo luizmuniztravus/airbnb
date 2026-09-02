@@ -20,6 +20,10 @@ export type CheckinEvent = {
   telefone?: string
   codigo?: string
   canal?: string
+  /** `confirmed`, `cancelled`… Define se a mensagem é de reserva ou cancelamento. */
+  status?: string
+  /** Preenchido pelo provedor quando a reserva é cancelada. */
+  motivoCancelamento?: string
   /** Payload original, sempre preservado. */
   raw: unknown
 }
@@ -139,8 +143,28 @@ export function normalizeCheckin(raw: unknown): CheckinEvent {
       'origem',
       'listing.channel',
     ]),
+    status: pickString(raw, ['status', 'booking_status', 'reservation_status', 'situacao']),
+    motivoCancelamento: pickString(raw, [
+      'cancellation_reason',
+      'cancelation_reason',
+      'motivo_cancelamento',
+    ]),
     raw,
   }
+}
+
+/**
+ * True quando o evento é um cancelamento.
+ *
+ * O provedor manda o mesmo webhook para reserva e cancelamento, mudando o
+ * `status`. Casa por prefixo para cobrir `cancelled`, `canceled`, `cancelado` e
+ * `cancelada` — a grafia varia entre canais. Um `cancellation_reason`
+ * preenchido também conta: se o motivo veio, houve cancelamento, mesmo que o
+ * status chegue num valor que não conhecemos.
+ */
+export function isCancelamento(evt: CheckinEvent): boolean {
+  if (evt.status?.trim().toLowerCase().startsWith('cancel')) return true
+  return (evt.motivoCancelamento ?? '').trim() !== ''
 }
 
 /** True quando nenhum campo conhecido foi reconhecido no payload. */
