@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   verificacao:
-    name: Typecheck e build (Node ${{ matrix.node }})
+    name: Typecheck, testes e build (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -42,6 +42,14 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      # A suíte usa `mock.module`, disponível a partir do Node 22.3 — por isso
+      # roda nas duas versões da matriz, não só na de desenvolvimento.
+      - name: Typecheck dos testes
+        run: npm run typecheck:tests
+
+      - name: Testes
+        run: npm test
 
       - name: Build
         run: npm run build

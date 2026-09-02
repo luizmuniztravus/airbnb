@@ -1,6 +1,9 @@
 node_modules/
 dist/
 
+# Worktrees criadas pelo Claude Code — não versionar.
+.claude/worktrees/
+
 # Sessão do WhatsApp e banco de dados.
 # NUNCA versionar: data/auth_info/ contém as credenciais do número pareado.
 data/
