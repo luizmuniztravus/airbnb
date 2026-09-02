@@ -1,6 +1,4 @@
-import { isUnmapped, type CheckinEvent } from './checkin.js'
-
-const RAW_LIMIT = 1500
+import { isCancelamento, isUnmapped, type CheckinEvent } from './checkin.js'
 
 /** ISO ou yyyy-mm-dd → dd/mm/aaaa. Qualquer outro formato passa intacto. */
 function formatDate(value: string | undefined): string | undefined {
@@ -11,14 +9,20 @@ function formatDate(value: string | undefined): string | undefined {
   return `${day}/${month}/${year}`
 }
 
-function truncate(text: string, limit: number): string {
-  return text.length <= limit ? text : `${text.slice(0, limit)}\n… (truncado)`
+/** `booking` → `Booking`. O provedor manda o canal em minúscula. */
+function capitalizar(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
 export function formatCheckinMessage(evt: CheckinEvent): string {
-  const lines: string[] = ['✅ *Check-in realizado*', '']
+  // Mesmo webhook, dois eventos: o título é o que separa um do outro no grupo.
+  const titulo = isCancelamento(evt)
+    ? '❌ *Cancelamento de Reserva*'
+    : '✅ *Nova Reserva Realizada*'
 
-  if (evt.hospede) lines.push(`👤 ${evt.hospede}`)
+  const cabecalho = [titulo, '']
+  const lines: string[] = []
+
   if (evt.imovel) lines.push(`🏠 ${evt.imovel}`)
 
   const checkIn = formatDate(evt.checkIn)
@@ -26,20 +30,25 @@ export function formatCheckinMessage(evt: CheckinEvent): string {
   if (checkIn && checkOut) lines.push(`📅 ${checkIn} → ${checkOut}`)
   else if (checkIn) lines.push(`📅 ${checkIn}`)
 
+  if (evt.hospede) lines.push(`👤 ${evt.hospede}`)
+
   if (evt.hospedes !== undefined) {
     lines.push(`👥 ${evt.hospedes} ${evt.hospedes === 1 ? 'hóspede' : 'hóspedes'}`)
   }
-  if (evt.codigo) lines.push(`🔖 ${evt.codigo}`)
-  if (evt.canal) lines.push(`🌐 ${evt.canal}`)
+  if (evt.canal) lines.push(`🌐 ${capitalizar(evt.canal)}`)
+  if (evt.telefone) lines.push(`☎️ ${evt.telefone}`)
 
+  // Sem o JSON cru anexado, esta linha passa a ser o único sinal no grupo de
+  // que chegou um formato desconhecido — o payload continua inteiro no banco.
   if (isUnmapped(evt)) {
-    lines.push('⚠️ _Payload ainda não mapeado — campos conhecidos não encontrados._')
+    // Só separa do que veio acima se houver algo acima: num payload totalmente
+    // desconhecido a lista está vazia e a linha em branco sobraria.
+    if (lines.length > 0) lines.push('')
+    lines.push(
+      '⚠️ _Formato não reconhecido: nenhum campo conhecido foi encontrado._',
+      '_O payload está salvo — veja `GET /events`._',
+    )
   }
 
-  // Enquanto o payload não está mapeado, anexar o JSON cru é o que permite
-  // descobrir o formato real do provedor direto no grupo. Remover na refatoração.
-  const rawJson = JSON.stringify(evt.raw, null, 2)
-  lines.push('', '_payload:_', '```', truncate(rawJson, RAW_LIMIT), '```')
-
-  return lines.join('\n')
+  return [...cabecalho, ...lines].join('\n')
 }

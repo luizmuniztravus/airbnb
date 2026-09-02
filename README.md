@@ -110,13 +110,45 @@ O teste do worker troca `whatsapp/client.ts` e `whatsapp/sender.ts` por dublês 
 
 ## Mapeando o payload real
 
-`src/domain/checkin.ts` é o **único** arquivo a mudar. Hoje ele procura cada campo em vários nomes possíveis e aceita não achar nada; a mensagem enviada anexa o JSON cru justamente para revelar o formato do provedor.
+`src/domain/checkin.ts` é o **único** arquivo a mudar para acrescentar ou renomear campos. Ele procura cada campo em vários nomes possíveis e aceita não achar nada.
 
-Quando o formato estabilizar:
+O primeiro formato real já está mapeado — um workflow de PMS entregando reservas do Booking:
 
-1. Colete exemplos reais: `curl -H "x-webhook-token: ..." localhost:3000/events`
-2. Reescreva `normalizeCheckin` com um parse estrito (zod) usando esses exemplos como fixtures.
-3. Remova o bloco `_payload:_` de `src/domain/template.ts`.
+```json
+{
+  "guest_name": "…", "guest_phone": "+55 11 …", "property_name": "Chalé 01",
+  "check_in": "26/10/2026", "check_out": "28/10/2026", "guests": "2",
+  "channel": "booking", "status": "confirmed",
+  "booking_uuid": "049f6f2f-…", "_workflow_execution_id": 968
+}
+```
+
+Repare em três detalhes que o código já trata: datas em `dd/mm/aaaa` (não ISO), números como texto (`"2"`), e o id da reserva em `booking_uuid` — que **precisa** estar em `ID_FIELDS` de `src/routes/webhook.ts`, senão a chave de deduplicação cai no hash do corpo, que inclui o `_workflow_execution_id` volátil, e um reprocessamento duplica a mensagem no grupo.
+
+### Reserva e cancelamento
+
+O mesmo webhook entrega os dois, mudando o `status`. O título da mensagem muda junto:
+
+```
+✅ *Nova Reserva Realizada*        ❌ *Cancelamento de Reserva*
+
+🏠 Chalé 01                        🏠 Chalé 01
+📅 26/10/2026 → 28/10/2026         📅 26/10/2026 → 28/10/2026
+👤 Luiz Filippe Muniz Bezerra      👤 Luiz Filippe Muniz Bezerra
+👥 2 hóspedes                      👥 2 hóspedes
+🌐 Booking                         🌐 Booking
+☎️ +55 11 94863 6475               ☎️ +55 11 94863 6475
+```
+
+O cancelamento chega com o **mesmo `booking_uuid`** da reserva. Por isso a chave de deduplicação ganha um sufixo de status quando ele não é `confirmed` — sem isso o cancelamento seria descartado como duplicata da reserva original e o grupo nunca saberia. O motivo (`cancellation_reason`) fica no banco e não vai para o grupo.
+
+Quando aparecer um formato novo:
+
+1. Colete o exemplo: `curl -H "x-webhook-token: ..." localhost:3000/events`
+2. Acrescente os nomes de campo às listas em `normalizeCheckin`.
+3. Congele o exemplo como fixture nos testes de `tests/domain/`.
+
+A mensagem avisa sozinha quando isso é necessário: se nenhum campo for reconhecido, ela sai com `⚠️ Formato não reconhecido` e o log registra `payload sem campos reconhecidos`.
 
 ## Produção com PM2
 
